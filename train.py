@@ -23,9 +23,9 @@ def load_model():
         #if model weights dont exist, initialize a new model with ImageNet weights
         print("Loading model architecture and ImageNet weights...")
         #load EfficientDet-D7 model with ImageNet weights (excluding top classification layers)
-        model = tf.keras.applications.EfficientDetD7(input_shape=(None, None, 3), include_top=False, weights='imagenet')
+        model = tf.keras.applications.EfficientDetD7(input_shape=(None, None, 3), include_top=False, weights='imagenet') #none for height and widtdh, 3 for rgb \ include_top is the final layer which we dont include to add our own
         #add custom classification layers for the 6 classes output
-        x = tf.keras.layers.GlobalAveragePooling2D()(model.output)  #global average pooling layer to reduce feature map dimensions
+        x = tf.keras.layers.GlobalAveragePooling2D()(model.output)  #global average pooling layer to reduce feature map dimensions (into 1D)
         x = tf.keras.layers.Dense(NUM_CLASSES, activation='softmax')(x)  #dense layer for classification with softmax activation
         model = tf.keras.Model(inputs=model.input, outputs=x)  #ceate a new model with the custom output layer
     return model
@@ -38,7 +38,7 @@ def preprocess_data(image, label):
     - normalize pixel values to the range [0, 1]
     """
     image = tf.image.resize(image, [512, 512])  #resize images to 512x512 pixels
-    image = image / 255.0  #normalize pixel values
+    image = image / 255.0  #normalize pixel values [0-1]
     return image, label
 
 #create training dataset
@@ -84,7 +84,7 @@ history = model.fit(
     validation_data=val_dataset,  #validation dataset
     epochs=100,  #number of epochs to train
     callbacks=[checkpoint_cb, early_stopping_cb, tensorboard_cb],  #list of callbacks
-    verbose=1  #verbosity mode
+    verbose=1  #verbosity mode (training progress)
 )
 
 #save final weights
