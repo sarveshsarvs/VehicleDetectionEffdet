@@ -4,8 +4,8 @@ import cv2
 import os
 
 #constants
-MODEL_SAVE_PATH = 'path/to/save/efficientdet-d7-model'
-IMAGE_PATH = 'path/to/test/image.jpg'  # Path to the test image
+MODEL_SAVE_PATH = 'path/to/model'
+IMAGE_PATH = 'path/to/test/image.jpg'
 
 #load the trained model
 def load_model():
@@ -27,7 +27,7 @@ def draw_boxes(image, boxes, class_ids, class_names):
     for i in range(boxes.shape[0]):
         box = boxes[i]
         class_id = int(class_ids[i])
-        #convert box coordinates from normalized to pixel values
+        #convert box coordinates from normalized to pixel values to draw on image
         ymin, xmin, ymax, xmax = box
         (height, width, _) = image.shape
         ymin = int(ymin * height)
@@ -47,26 +47,36 @@ def main():
     model = load_model()  #load the trained model
     image, preprocessed_image = preprocess_image(IMAGE_PATH)  #load and preprocess the image
 
-    #perform detection
+    #detection
     predictions = model.predict(preprocessed_image)
-    boxes, class_ids, scores = predictions[0], predictions[1], predictions[2]  #assuming output is in this format
+    boxes, class_ids, scores = predictions[0], predictions[1], predictions[2]
 
-    #filter out boxes with low confidence scores (if needed)
+    #filter out boxes with low confidence scores
     confidence_threshold = 0.5
     high_confidence_indices = np.where(scores > confidence_threshold)
     boxes = boxes[high_confidence_indices]
     class_ids = class_ids[high_confidence_indices]
 
-    #define class names (ensure these match the classes in your training dataset)
-    class_names = ['class_1', 'class_2', 'class_3', 'class_4', 'class_5', 'class_6']
+    #class names in dataset
+    class_names = ['car', 'bike', 'rickshaw', 'truck', 'cart', 'ambulance']
 
     #draw boxes and labels on the image
     annotated_image = draw_boxes(image, boxes, class_ids, class_names)
 
-    #save the output image with annotations
-    output_image_path = 'path/to/output/annotated_image.jpg'
-    cv2.imwrite(output_image_path, annotated_image)
-    print(f"Annotated image saved to {output_image_path}")
+    #calculate total number of detected vehicles
+    total_vehicles = len(boxes)
+    print(f"Total number of vehicles detected: {total_vehicles}")
+
+    #calculate vehicle density
+    (height, width, _) = image.shape
+    image_area = height * width #total area
+    vehicle_density = total_vehicles / image_area #vehicle density
+    print(f"Vehicle density: {vehicle_density:.6f} vehicles per pixel")
+
+    #display image
+    cv2.imshow("Annotated Image", annotated_image)
+    cv2.waitKey(0)  #wait for a key press to close window
+    cv2.destroyAllWindows()  #close the window
 
 if __name__ == "__main__":
     main()
