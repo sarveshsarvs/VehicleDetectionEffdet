@@ -1,12 +1,27 @@
 import tensorflow as tf
+import tensorflow_hub as hub
+from tensorflow.keras.layers import Input, GlobalAveragePooling2D, Dense
 from tensorflow.keras import optimizers, callbacks
 from tensorflow.keras.preprocessing import image_dataset_from_directory
 import os
 
 #constants
-MODEL_SAVE_PATH = 'path/to/save/efficientdet-d7-model'  #path where the trained model will be saved
-DATASET_PATH = 'path/to/dataset'  #path to the dataset directory
+MODEL_SAVE_PATH = './DetModel'  #path where the trained model will be saved
+DATASET_PATH = '/home/allan/Desktop'  #path to the dataset directory
 NUM_CLASSES = 6  #number of classes (car, bike, truck, auto, rickshaw, ambulance)
+
+class CustomHubLayer(tf.keras.layers.Layer):  #fix keras layer and tensorflow layer smth idk issue im malding
+    def __init__(self, model_url, **kwargs):  #makes the custom layer with a proper shape
+        super(CustomHubLayer, self).__init__(**kwargs)
+        self.model_url = model_url
+        self.hub_layer = hub.KerasLayer(model_url, trainable=True) #creates a keras layer
+    
+    def call(self, inputs): #called during forward pass of model. allows custom layer to process data using pretrained model
+        return self.hub_layer(inputs) #gets input and passes them through 'self.hub_layer(inputs)
+
+    def compute_output_shape(self, input_shape):    #specifies output shape
+        return tf.TensorShape([None, 512, 512, 3])  #defines custom layer output for pretrained model, None indicates that batch size is variable
+    
 
 #load EfficientDet-D7 model
 def load_model():
@@ -20,14 +35,15 @@ def load_model():
         print("Loading model with existing weights...")
         model = tf.keras.models.load_model(MODEL_SAVE_PATH, compile=False)
     else:
-        #if model weights dont exist, initialize a new model with ImageNet weights
-        print("Loading model architecture and ImageNet weights...")
-        #load EfficientDet-D7 model with ImageNet weights (excluding top classification layers)
-        model = tf.keras.applications.EfficientDetD7(input_shape=(None, None, 3), include_top=False, weights='imagenet') #none for height and widtdh, 3 for rgb \ include_top is the final layer which we dont include to add our own
-        #add custom classification layers for the 6 classes output
-        x = tf.keras.layers.GlobalAveragePooling2D()(model.output)  #global average pooling layer to reduce feature map dimensions (into 1D)
-        x = tf.keras.layers.Dense(NUM_CLASSES, activation='softmax')(x)  #dense layer for classification with softmax activation
-        model = tf.keras.Model(inputs=model.input, outputs=x)  #ceate a new model with the custom output layer
+        #if model doesnt exist, get it online
+        print("Loading model architecture and pre-trained weights...")
+        model_url = "https://tfhub.dev/tensorflow/efficientdet/d7/1"
+        #add your custom layers for the number of classes
+        inputs = Input(shape=(512, 512, 3)) #create new input 512x512 res and RGB(3 color channels)
+        x = CustomHubLayer(model_url)(inputs)  #passes input through pre-trained model
+        x = GlobalAveragePooling2D()(x)  #add pooling layer
+        outputs = Dense(NUM_CLASSES, activation='softmax')(x) #custom output layer
+        model = tf.keras.Model(inputs=inputs, outputs=outputs)
     return model
 
 #load and preprocess dataset
