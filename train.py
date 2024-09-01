@@ -14,7 +14,7 @@ class CustomHubLayer(tf.keras.layers.Layer):  #fix keras layer and tensorflow la
     def __init__(self, model_url, **kwargs):  #makes the custom layer with a proper shape
         super(CustomHubLayer, self).__init__(**kwargs)
         self.model_url = model_url
-        self.hub_layer = hub.KerasLayer(model_url, trainable=True) #creates a keras layer
+        self.hub_layer = hub.KerasLayer(model_url, trainable=False) #creates a keras layer
     
     def call(self, inputs): #called during forward pass of model. allows custom layer to process data using pretrained model
         return self.hub_layer(inputs) #gets input and passes them through 'self.hub_layer(inputs)
