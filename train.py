@@ -1,107 +1,272 @@
-import tensorflow as tf
-import tensorflow_hub as hub
-from tensorflow.keras.layers import Input, GlobalAveragePooling2D, Dense
-from tensorflow.keras import optimizers, callbacks
-from tensorflow.keras.preprocessing import image_dataset_from_directory
+import torch
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
+from PIL import Image
+import json
 import os
+from effdet import create_model
+import torch.nn as nn
+import torch.nn.functional as F
 
-#constants
-MODEL_SAVE_PATH = './DetModel'  #path where the trained model will be saved
-DATASET_PATH = '/home/allan/Desktop'  #path to the dataset directory
-NUM_CLASSES = 6  #number of classes (car, bike, truck, auto, rickshaw, ambulance)
+#load dataset from coco
+class CustomDataset(Dataset):
+    def __init__(self, image_dir, annotation_file, transform=None):
+        self.image_dir = image_dir
+        self.transform = transform
 
-class CustomHubLayer(tf.keras.layers.Layer):  #fix keras layer and tensorflow layer smth idk issue im malding
-    def __init__(self, model_url, **kwargs):  #makes the custom layer with a proper shape
-        super(CustomHubLayer, self).__init__(**kwargs)
-        self.model_url = model_url
-        self.hub_layer = hub.KerasLayer(model_url, trainable=False) #creates a keras layer
+        #load the annotations from json
+        with open(annotation_file, 'r') as f:
+            self.data = json.load(f)
+
+        #extract image file paths and annotations
+        self.image_files = [os.path.join(image_dir, img['file_name']) for img in self.data['images']]
+        self.annotations = self.data['annotations']
+
+        #number of annotations loaded for debug
+        print(f"Loaded {len(self.annotations)} annotations.")
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        img_path = self.image_files[idx]
+        image = Image.open(img_path).convert("RGB")
+        
+        #resize the image to 512x512
+        image = image.resize((512, 512))
+        
+        if self.transform:
+            image = self.transform(image)
+        
+        #load annotations for the current image
+        target = [ann for ann in self.annotations if ann['image_id'] == self.data['images'][idx]['id']]
+        
+        #print warning if no annotations are found for image
+        if len(target) == 0:
+            print(f"Warning: No annotations for image index {idx} with image_id {self.data['images'][idx]['id']}")
+        
+        #convert annotations to tensors (the pain this mf inflicted on me)
+        target = {
+            'boxes': torch.tensor([ann['bbox'] for ann in target], dtype=torch.float32),
+            'labels': torch.tensor([ann['category_id'] for ann in target], dtype=torch.int64),
+        }
+        
+        return image, target
+
+#custom collate function to handle batching (this guy... i dont want to talk about this)
+def collate_fn(batch):
+    images, targets = zip(*batch)
     
-    def call(self, inputs): #called during forward pass of model. allows custom layer to process data using pretrained model
-        return self.hub_layer(inputs) #gets input and passes them through 'self.hub_layer(inputs)
-
-    def compute_output_shape(self, input_shape):    #specifies output shape
-        return tf.TensorShape([None, 512, 512, 3])  #defines custom layer output for pretrained model, None indicates that batch size is variable
+    #stack images into a 4D tensor (batch_size, channels, height, width)
+    images = torch.stack([img for img in images], dim=0)
     
+    #targets need to be handled as a list of dictionaries
+    targets = [{k: v for k, v in t.items()} for t in targets]
+    
+    return images, targets
 
-#load EfficientDet-D7 model
-def load_model():
-    """
-    load or initialize the EfficientDet-D7 model
-    - if a model with existing weights is found at MODEL_SAVE_PATH, load it
-    - otherwise, load the EfficientDet-D7 model with ImageNet weights and add custom layers
-    """
-    if os.path.exists(MODEL_SAVE_PATH):
-        #if model weights exist, load the model from the path
-        print("Loading model with existing weights...")
-        model = tf.keras.models.load_model(MODEL_SAVE_PATH, compile=False)
-    else:
-        #if model doesnt exist, get it online
-        print("Loading model architecture and pre-trained weights...")
-        model_url = "https://tfhub.dev/tensorflow/efficientdet/d7/1"
-        #add your custom layers for the number of classes
-        inputs = Input(shape=(512, 512, 3)) #create new input 512x512 res and RGB(3 color channels)
-        x = CustomHubLayer(model_url)(inputs)  #passes input through pre-trained model
-        x = GlobalAveragePooling2D()(x)  #add pooling layer
-        outputs = Dense(NUM_CLASSES, activation='softmax')(x) #custom output layer
-        model = tf.keras.Model(inputs=inputs, outputs=outputs)
-    return model
+#data transformations for preprocessing images (the previous resize wasnt enough smh)
+train_transform = transforms.Compose([
+    transforms.Resize((512, 512)),
+    transforms.ToTensor(),
+])
 
-#load and preprocess dataset
-def preprocess_data(image, label):
-    """
-    preprocess images for training
-    - resize images to 512x512 pixels
-    - normalize pixel values to the range [0, 1]
-    """
-    image = tf.image.resize(image, [512, 512])  #resize images to 512x512 pixels
-    image = image / 255.0  #normalize pixel values [0-1]
-    return image, label
-
-#create training dataset
-train_dataset = image_dataset_from_directory(
-    DATASET_PATH,  #directory where dataset is stored
-    label_mode="categorical",  #use categorical labels (one-hot encoded)
-    batch_size=16,  #number of images per batch
-    image_size=(512, 512),  #resize images to 512x512 pixels
-    validation_split=0.2,  #use 20% of the data for validation
-    subset="training",  #specify this subset as the training data
-    seed=123  #seed for reproducibility (can be anything)
+#initialize dataset and dataloaders
+train_dataset = CustomDataset(
+    image_dir='/home/allan/project/sih/Dataset/train/images',
+    annotation_file='/home/allan/project/sih/Dataset/train/annotations_coco.json',
+    transform=train_transform
 )
 
-#create validation dataset
-val_dataset = image_dataset_from_directory(
-    DATASET_PATH,  #directory where dataset is stored
-    label_mode="categorical",  #use categorical labels (one-hot encoded)
-    batch_size=16,  #number of images per batch
-    image_size=(512, 512),  #resize images to 512x512 pixels
-    validation_split=0.2,  #use 20% of the data for validation
-    subset="validation",  #Specify this subset as the validation data
-    seed=123  #seed for reproducibility
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=8,  #set batch size
+    shuffle=True,
+    num_workers=4,  #number of cores for data loading
+    collate_fn=collate_fn  #use custom collate function (as if mf did it default)
 )
 
-#apply prefetching to improve performance
-AUTOTUNE = tf.data.AUTOTUNE  #automatically tune prefetch buffer size
-train_dataset = train_dataset.cache().shuffle(1024).prefetch(buffer_size=AUTOTUNE)  #cache and shuffle training dataset, then prefetch
-val_dataset = val_dataset.prefetch(buffer_size=AUTOTUNE)  #prefetch validation dataset
+#focal Loss implementation (oh boy oh boy where do i even start with the issues i had with crossentropyloss)
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+    
+    def forward(self, inputs, targets):
+        #compute cross-entropy loss (and using this indirectly has no issues??? Blasphemy!)
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        #calculate focal loss
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        return focal_loss.mean()
 
-#model setup
-model = load_model()  #load or initialize the model
-optimizer = optimizers.Adam(learning_rate=1e-3)  #adam optimizer with learning rate of 0.001
-model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy'])  #compile the model with loss function and metrics
+#filter predictions to match targets (this guy is the GOAT, else i end up with a million predictions[40000~])
+def filter_predictions(predictions, targets):
+    class_preds, bbox_preds = predictions
 
-#callbacks for model training
-checkpoint_cb = callbacks.ModelCheckpoint(MODEL_SAVE_PATH, save_best_only=True)  #save only the best model weights
-early_stopping_cb = callbacks.EarlyStopping(patience=10, restore_best_weights=True)  #stop training early if no improvement in 10 epochs
-tensorboard_cb = callbacks.TensorBoard(log_dir='logs/fit')  #log training progress for TensorBoard
+    filtered_class_preds = []
+    filtered_bbox_preds = []
+    filtered_targets = []
 
-#train the model
-history = model.fit(
-    train_dataset,  #training dataset
-    validation_data=val_dataset,  #validation dataset
-    epochs=100,  #number of epochs to train
-    callbacks=[checkpoint_cb, early_stopping_cb, tensorboard_cb],  #list of callbacks
-    verbose=1  #verbosity mode (training progress)
-)
+    for class_pred, bbox_pred, target in zip(class_preds, bbox_preds, targets):
+        #these flatten were the silver bullet afterall
+        #flatten predictions if they are 4D tensors
+        if class_pred.dim() == 4:
+            batch_size, num_classes, height, width = class_pred.shape
+            class_pred_flat = class_pred.view(batch_size, num_classes, -1).permute(0, 2, 1).contiguous().view(-1, num_classes)
+        else:
+            class_pred_flat = class_pred.view(-1, class_pred.size(-1))
 
-#save final weights
-model.save_weights(MODEL_SAVE_PATH)  #save model weights after training
+        #flatten bounding box predictions
+        if bbox_pred.dim() == 4:
+            bbox_pred_flat = bbox_pred.view(batch_size, -1, 4)
+        else:
+            bbox_pred_flat = bbox_pred.view(-1, 4)
+
+        #extract targets
+        target_boxes = target['boxes']
+        target_labels = target['labels']
+
+        num_targets = target_labels.size(0)
+        num_preds = class_pred_flat.size(0)
+
+        if num_targets > num_preds:
+            raise ValueError(f"Number of targets ({num_targets}) is greater than number of predictions ({num_preds})")
+
+        #filter class predictions and bounding boxes
+        filtered_class_pred = class_pred_flat[:num_targets]
+        filtered_bbox_pred = bbox_pred_flat[:num_targets]
+
+        filtered_class_preds.append(filtered_class_pred)
+        filtered_bbox_preds.append(filtered_bbox_pred)
+        filtered_targets.append({
+            'boxes': target_boxes[:num_targets],
+            'labels': target_labels[:num_targets]
+        })
+
+    return (filtered_class_preds, filtered_bbox_preds), filtered_targets
+
+#custom loss function (i hate this shit with every cell of my body, no amount of therapy wil suffice for the trauma this bought upon me)
+class EfficientDetLoss(nn.Module):
+    def __init__(self, num_classes):
+        super(EfficientDetLoss, self).__init__()
+        self.num_classes = num_classes
+        self.classification_loss = FocalLoss()
+        self.bbox_regression_loss = nn.SmoothL1Loss()
+
+    def forward(self, predictions, targets):
+        class_preds, bbox_preds = predictions
+
+        #flatten predictions
+        class_preds_flat = []
+        bbox_preds_flat = []
+
+        for level_class_pred, level_bbox_pred in zip(class_preds, bbox_preds):
+            if level_class_pred.dim() == 4:
+                class_preds_flat.append(level_class_pred.view(level_class_pred.size(0), -1, level_class_pred.size(1)).permute(0, 2, 1).contiguous().view(-1, level_class_pred.size(1)))
+            else:
+                class_preds_flat.append(level_class_pred.view(-1, level_class_pred.size(-1)))
+
+            if level_bbox_pred.dim() == 4:
+                bbox_preds_flat.append(level_bbox_pred.view(level_bbox_pred.size(0), -1, 4))
+            else:
+                bbox_preds_flat.append(level_bbox_pred.view(-1, 4))
+
+        #debugging information (i aint removing this, serves as a testament to the tribulations)
+        for i, tensor in enumerate(class_preds_flat):
+            print(f"Class predictions tensor {i} size: {tensor.size()}")
+
+        for i, tensor in enumerate(bbox_preds_flat):
+            print(f"Bbox predictions tensor {i} size: {tensor.size()}")
+
+        #filter predictions and targets
+        (filtered_class_preds, filtered_bbox_preds), filtered_targets = filter_predictions((class_preds_flat, bbox_preds_flat), targets)
+
+        total_class_loss = 0
+        total_bbox_loss = 0
+
+        for i, target in enumerate(filtered_targets):
+            class_targets = target['labels']
+            bbox_targets = target['boxes']
+
+            #flatten targets
+            class_targets_flat = class_targets.view(-1)
+            bbox_targets_flat = bbox_targets.view(-1, 4)
+
+            num_preds = filtered_class_preds[i].size(0)
+            num_targets = class_targets_flat.size(0)
+
+            if num_targets > num_preds:
+                raise ValueError(f"Number of targets ({num_targets}) is greater than number of predictions ({num_preds})")
+
+            #adjust targets to match number of predictions
+            if num_preds > num_targets:
+                num_repeats = num_preds // num_targets
+                class_targets_flat = class_targets_flat.repeat(num_repeats)
+
+                if class_targets_flat.size(0) != num_preds:
+                    raise ValueError(f"Number of targets ({class_targets_flat.size(0)}) does not match number of predictions ({num_preds})")
+
+            assert class_targets_flat.size(0) == filtered_class_preds[i].size(0), "Target size does not match prediction size."
+
+            #calculate loss
+            class_loss = self.classification_loss(filtered_class_preds[i], class_targets_flat)
+            total_class_loss += class_loss
+
+            bbox_loss = self.bbox_regression_loss(filtered_bbox_preds[i], bbox_targets_flat)
+            total_bbox_loss += bbox_loss
+
+        #compute total loss as the sum of classification and bounding box losses
+        total_loss = (total_class_loss / len(filtered_targets)) + (total_bbox_loss / len(filtered_targets))
+
+        return total_loss
+
+#initialize model
+model = create_model('tf_efficientdet_lite3', pretrained=True, num_classes=6)  #(car, bike, rickshaw, cark, truck, ambulance)
+num_classes = 6
+loss_fn = EfficientDetLoss(num_classes)
+
+#training parameters
+device = torch.device('cpu')   #('cuda' if torch.cuda.is_available() else 'cpu')
+model.to(device)
+
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+num_epochs = 10
+
+#initialize variables for saving the best model
+best_loss = float('inf')  #set an initial high value 
+model_save_path = 'efficientdet_d6.pth'
+
+#training loop
+for epoch in range(num_epochs):
+    model.train()
+    epoch_loss = 0
+    for images, targets in train_loader:
+        images = images.to(device)  #move images to the device
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+        
+        optimizer.zero_grad()  #clear previous gradients
+        
+        #forward pass
+        predictions = model(images)
+        
+        #calculate losses
+        total_loss = loss_fn(predictions, targets)
+        
+        total_loss.backward()  #compute gradients
+        optimizer.step()  #update weights
+        
+        epoch_loss += total_loss.item()  #accumulate loss for the epoch
+
+    #calculate average loss for the epoch
+    avg_epoch_loss = epoch_loss / len(train_loader)
+    print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_epoch_loss}")
+
+    #save the best model based on the lowest loss
+    if avg_epoch_loss < best_loss:
+        best_loss = avg_epoch_loss
+        torch.save(model.state_dict(), model_save_path)
+        print(f"Model saved with loss: {best_loss}")
+
+print("Training complete!")
