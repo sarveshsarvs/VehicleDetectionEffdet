@@ -1,0 +1,101 @@
+import os
+import json
+import xml.etree.ElementTree as ET
+from PIL import Image
+
+# Paths
+image_dir = '/home/allan/project/sih/Dataset/validation/images'
+annotation_dir = '/home/allan/project/sih/Dataset/validation/annotations/'
+output_file = '/home/allan/project/sih/Dataset/validation/annotations_coco.json'
+
+# Mapping of class names to IDs (adjust as needed)
+class_map = {
+    'car': 1,
+    'bike': 2,
+    'truck': 3,
+    'cart': 4,
+    'rickshaw': 5,
+    'ambulance': 6
+}
+
+# Initialize COCO format dictionary
+coco_format = {
+    'images': [],
+    'annotations': [],
+    'categories': [{'id': i, 'name': name} for name, i in class_map.items()],
+}
+
+annotation_id = 1  # Initialize annotation_id globally
+
+def parse_xml_annotation(xml_file):
+    global annotation_id
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
+    
+    image_info = root.find('size')
+    width = int(image_info.find('width').text)
+    height = int(image_info.find('height').text)
+    
+    annotations = []
+    
+    for obj in root.findall('object'):
+        class_name = obj.find('name').text
+        class_id = class_map.get(class_name, -1)  # Map class names to integer IDs
+        bbox = obj.find('bndbox')
+        xmin = int(bbox.find('xmin').text)
+        xmax = int(bbox.find('xmax').text)
+        ymin = int(bbox.find('ymin').text)
+        ymax = int(bbox.find('ymax').text)
+        
+        # Append annotation data
+        annotations.append({
+            'id': annotation_id,
+            'image_id': None,  # Placeholder for image_id
+            'category_id': class_id,
+            'bbox': [xmin, ymin, xmax - xmin, ymax - ymin],
+            'area': (xmax - xmin) * (ymax - ymin),
+            'iscrowd': 0
+        })
+        annotation_id += 1  # Increment the annotation_id
+    
+    return annotations, width, height
+
+def convert_voc_to_coco(voc_annotations_dir, image_dir, output_path):
+    coco_format['images'] = []
+    coco_format['annotations'] = []
+    
+    for annotation_file in os.listdir(voc_annotations_dir):
+        if annotation_file.endswith('.xml'):
+            image_file = annotation_file.replace('.xml', '.jpeg')  # Assuming JPEG images
+            image_path = os.path.join(image_dir, image_file)
+            xml_path = os.path.join(voc_annotations_dir, annotation_file)
+            
+            if not os.path.isfile(image_path):
+                print(f"File does not exist: {image_path}")
+                continue
+            
+            # Add image information to COCO format
+            image = Image.open(image_path)
+            width, height = image.size
+            
+            coco_format['images'].append({
+                'id': len(coco_format['images']) + 1,
+                'file_name': image_file,
+                'width': width,
+                'height': height
+            })
+
+            # Parse annotation and add to COCO format
+            annotations, img_width, img_height = parse_xml_annotation(xml_path)
+            for annotation in annotations:
+                annotation['image_id'] = len(coco_format['images'])  # Set the correct image_id
+                coco_format['annotations'].append(annotation)
+    
+    # Write the COCO format dictionary to JSON file
+    with open(output_path, 'w') as f:
+        json.dump(coco_format, f, indent=4)
+
+# Convert VOC annotations to COCO format
+convert_voc_to_coco(annotation_dir, image_dir, output_file)
+
+#thx chatgpt
