@@ -1,82 +1,87 @@
-import tensorflow as tf
+import torch
 import numpy as np
-import cv2
-import os
+from torchvision import transforms
+from PIL import Image
+from effdet import create_model
 
-#constants
-MODEL_SAVE_PATH = 'path/to/model'
-IMAGE_PATH = 'path/to/test/image.jpg'
-
-#load the trained model
-def load_model():
-    print("Loading model with existing weights...")
-    model = tf.keras.models.load_model(MODEL_SAVE_PATH, compile=False)
+#define the model and loading function
+def load_model(model_path):
+    #load EfficientDet-Lite3 model
+    model = create_model('tf_efficientdet_lite3', pretrained=True, num_classes=6)
+    
+    #load the saved state_dict
+    state_dict = torch.load(model_path, map_location='cpu')
+    
+    #load the state dict into the model
+    model.load_state_dict(state_dict)
+    
+    model.eval()
     return model
 
-#load and preprocess test image
-def preprocess_image(image_path):
-    image = cv2.imread(image_path)  #read image using OpenCV
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  #convert image to RGB
-    image_resized = tf.image.resize(image_rgb, [512, 512])  #resize to match the input size
-    image_normalized = image_resized / 255.0  #normalize to [0, 1]
-    image_expanded = tf.expand_dims(image_normalized, axis=0)  #add batch dimension
-    return image, image_expanded
+def preprocess_image(image_path, input_size):
+    image = Image.open(image_path).convert("RGB")
+    transform = transforms.Compose([
+        transforms.Resize((input_size, input_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    return transform(image).unsqueeze(0)  #add batch dimension
 
-#draw bounding boxes and labels on image
-def draw_boxes(image, boxes, class_ids, class_names):
-    for i in range(boxes.shape[0]):
-        box = boxes[i]
-        class_id = int(class_ids[i])
-        #convert box coordinates from normalized to pixel values to draw on image
-        ymin, xmin, ymax, xmax = box
-        (height, width, _) = image.shape
-        ymin = int(ymin * height)
-        xmin = int(xmin * width)
-        ymax = int(ymax * height)
-        xmax = int(xmax * width)
+def draw_boxes(image, boxes, scores, labels, class_names):
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
 
-        #draw the bounding box and label
-        color = (0, 255, 0)  #green color
-        label = class_names[class_id]
-        image = cv2.rectangle(image, (xmin, ymin), (xmax, ymax), color, 2)
-        image = cv2.putText(image, label, (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
-    return image
+    fig, ax = plt.subplots(1, figsize=(12, 9))
+    ax.imshow(image)
 
-#main function
+    for box, score, label in zip(boxes, scores, labels):
+        box = [int(x) for x in box]
+        rect = patches.Rectangle((box[0], box[1]), box[2] - box[0], box[3] - box[1], linewidth=1, edgecolor='r', facecolor='none')
+        ax.add_patch(rect)
+        plt.text(box[0], box[1], f'{class_names[label]}: {score:.2f}', bbox=dict(facecolor='yellow', alpha=0.5))
+
+    plt.show()
+
 def main():
-    model = load_model()  #load the trained model
-    image, preprocessed_image = preprocess_image(IMAGE_PATH)  #load and preprocess the image
 
-    #detection
-    predictions = model.predict(preprocessed_image)
-    boxes, class_ids, scores = predictions[0], predictions[1], predictions[2]
+    MODEL_SAVE_PATH = '/home/allan/project/sih/efficientdet_d6_best.pth'
+    IMAGE_PATH = '/home/allan/project/sih/Dataset/validation/images/images2.jpeg'
+    INPUT_SIZE = 512  #set input size according to your model configuration
+    CLASS_NAMES = ['car', 'bike', 'truck', 'rickshaw', 'cart', 'ambulance']  #update with your class names
 
-    #filter out boxes with low confidence scores
-    confidence_threshold = 0.5
-    high_confidence_indices = np.where(scores > confidence_threshold)
-    boxes = boxes[high_confidence_indices]
-    class_ids = class_ids[high_confidence_indices]
+    #load the model
+    model = load_model(MODEL_SAVE_PATH)
+    
+    #preprocess the image
+    image_tensor = preprocess_image(IMAGE_PATH, INPUT_SIZE)
+    
+    #perform inference
+    with torch.no_grad():
+        predictions = model(image_tensor)
+    
+    #extract bounding boxes, scores, and labels from the predictions
+    boxes = []
+    scores = []
+    labels = []
 
-    #class names in dataset
-    class_names = ['car', 'bike', 'rickshaw', 'truck', 'cart', 'ambulance']
 
-    #draw boxes and labels on the image
-    annotated_image = draw_boxes(image, boxes, class_ids, class_names)
+    for pred in predictions:
+        if isinstance(pred, torch.Tensor):
+            if len(pred.shape) == 4:
+                #handle if predictions is a 4D tensor
+                num_boxes = pred.shape[1]
+                boxes.append(pred[0].reshape(num_boxes, -1).cpu().numpy())
+            else:
+                boxes.append(pred[0].cpu().numpy())
+    
+    #convert lists to numpy arrays
+    boxes = np.concatenate(boxes, axis=0) if boxes else np.array([])
+    scores = np.concatenate(scores, axis=0) if scores else np.array([])
+    labels = np.concatenate(labels, axis=0) if labels else np.array([])
 
-    #calculate total number of detected vehicles
-    total_vehicles = len(boxes)
-    print(f"Total number of vehicles detected: {total_vehicles}")
+    #draw boxes on the image
+    image = Image.open(IMAGE_PATH)
+    draw_boxes(image, boxes, scores, labels, CLASS_NAMES)
 
-    #calculate vehicle density
-    (height, width, _) = image.shape
-    image_area = height * width #total area
-    vehicle_density = total_vehicles / image_area #vehicle density
-    print(f"Vehicle density: {vehicle_density:.6f} vehicles per pixel")
-
-    #display image
-    cv2.imshow("Annotated Image", annotated_image)
-    cv2.waitKey(0)  #wait for a key press to close window
-    cv2.destroyAllWindows()  #close the window
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
