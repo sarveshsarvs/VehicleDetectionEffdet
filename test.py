@@ -91,7 +91,7 @@ def main():
         print("Inference done")
     
     # Process predictions with a score threshold of 0.5
-    boxes, scores, labels = process_predictions(predictions, threshold=217)
+    boxes, scores, labels = process_predictions(predictions, threshold=214)
     print("Boxes:\n", boxes)
     print("Scores:\n", scores)
     print("Labels:\n", labels)
