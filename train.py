@@ -32,6 +32,7 @@ class CustomDataset(Dataset):
         img_path = self.image_files[idx]
         image = Image.open(img_path).convert("RGB")
         
+
         #resize the image to 512x512
         image = image.resize((512, 512))
         
@@ -80,7 +81,7 @@ train_dataset = CustomDataset(
 
 train_loader = DataLoader(
     train_dataset,
-    batch_size=8,  #set batch size
+    batch_size=7,  #set batch size 8
     shuffle=True,
     num_workers=4,  #number of cores for data loading
     collate_fn=collate_fn  #use custom collate function (as if mf did it default)
@@ -110,21 +111,18 @@ def filter_predictions(predictions, targets):
     filtered_targets = []
 
     for class_pred, bbox_pred, target in zip(class_preds, bbox_preds, targets):
-        #these flatten were the silver bullet afterall
-        #flatten predictions if they are 4D tensors
+        # Flatten predictions if they are 4D tensors
         if class_pred.dim() == 4:
-            batch_size, num_classes, height, width = class_pred.shape
-            class_pred_flat = class_pred.view(batch_size, num_classes, -1).permute(0, 2, 1).contiguous().view(-1, num_classes)
+            class_pred_flat = class_pred.view(class_pred.size(0), -1, class_pred.size(1)).permute(0, 2, 1).contiguous().view(-1, class_pred.size(1))
         else:
             class_pred_flat = class_pred.view(-1, class_pred.size(-1))
 
-        #flatten bounding box predictions
         if bbox_pred.dim() == 4:
-            bbox_pred_flat = bbox_pred.view(batch_size, -1, 4)
+            bbox_pred_flat = bbox_pred.view(bbox_pred.size(0), -1, 4)
         else:
             bbox_pred_flat = bbox_pred.view(-1, 4)
 
-        #extract targets
+        # Extract targets
         target_boxes = target['boxes']
         target_labels = target['labels']
 
@@ -134,7 +132,7 @@ def filter_predictions(predictions, targets):
         if num_targets > num_preds:
             raise ValueError(f"Number of targets ({num_targets}) is greater than number of predictions ({num_preds})")
 
-        #filter class predictions and bounding boxes
+        # Filter class predictions and bounding boxes
         filtered_class_pred = class_pred_flat[:num_targets]
         filtered_bbox_pred = bbox_pred_flat[:num_targets]
 
@@ -147,6 +145,7 @@ def filter_predictions(predictions, targets):
 
     return (filtered_class_preds, filtered_bbox_preds), filtered_targets
 
+
 #custom loss function (i hate this shit with every cell of my body, no amount of therapy wil suffice for the trauma this bought upon me)
 class EfficientDetLoss(nn.Module):
     def __init__(self, num_classes):
@@ -158,7 +157,7 @@ class EfficientDetLoss(nn.Module):
     def forward(self, predictions, targets):
         class_preds, bbox_preds = predictions
 
-        #flatten predictions
+        # Flatten predictions
         class_preds_flat = []
         bbox_preds_flat = []
 
@@ -173,14 +172,7 @@ class EfficientDetLoss(nn.Module):
             else:
                 bbox_preds_flat.append(level_bbox_pred.view(-1, 4))
 
-        #debugging information (i aint removing this, serves as a testament to the tribulations)
-        for i, tensor in enumerate(class_preds_flat):
-            print(f"Class predictions tensor {i} size: {tensor.size()}")
-
-        for i, tensor in enumerate(bbox_preds_flat):
-            print(f"Bbox predictions tensor {i} size: {tensor.size()}")
-
-        #filter predictions and targets
+        # Filter predictions and targets
         (filtered_class_preds, filtered_bbox_preds), filtered_targets = filter_predictions((class_preds_flat, bbox_preds_flat), targets)
 
         total_class_loss = 0
@@ -190,7 +182,7 @@ class EfficientDetLoss(nn.Module):
             class_targets = target['labels']
             bbox_targets = target['boxes']
 
-            #flatten targets
+            # Flatten targets
             class_targets_flat = class_targets.view(-1)
             bbox_targets_flat = bbox_targets.view(-1, 4)
 
@@ -200,7 +192,7 @@ class EfficientDetLoss(nn.Module):
             if num_targets > num_preds:
                 raise ValueError(f"Number of targets ({num_targets}) is greater than number of predictions ({num_preds})")
 
-            #adjust targets to match number of predictions
+            # Adjust targets to match number of predictions
             if num_preds > num_targets:
                 num_repeats = num_preds // num_targets
                 class_targets_flat = class_targets_flat.repeat(num_repeats)
@@ -210,17 +202,18 @@ class EfficientDetLoss(nn.Module):
 
             assert class_targets_flat.size(0) == filtered_class_preds[i].size(0), "Target size does not match prediction size."
 
-            #calculate loss
+            # Calculate loss
             class_loss = self.classification_loss(filtered_class_preds[i], class_targets_flat)
             total_class_loss += class_loss
 
             bbox_loss = self.bbox_regression_loss(filtered_bbox_preds[i], bbox_targets_flat)
             total_bbox_loss += bbox_loss
 
-        #compute total loss as the sum of classification and bounding box losses
+        # Compute total loss as the sum of classification and bounding box losses
         total_loss = (total_class_loss / len(filtered_targets)) + (total_bbox_loss / len(filtered_targets))
 
         return total_loss
+
 
 #initialize model
 model = create_model('tf_efficientdet_lite3', pretrained=True, num_classes=6)  #(car, bike, rickshaw, cark, truck, ambulance)
@@ -228,15 +221,15 @@ num_classes = 6
 loss_fn = EfficientDetLoss(num_classes)
 
 #training parameters
-device = torch.device('cpu')   #('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-num_epochs = 10
+num_epochs = 2000
 
 #initialize variables for saving the best model
 best_loss = float('inf')  #set an initial high value 
-model_save_path = 'efficientdet_d6.pth'
+model_save_path = 'efficientdet.pth'
 
 #training loop
 for epoch in range(num_epochs):
