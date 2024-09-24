@@ -74,8 +74,8 @@ train_transform = transforms.Compose([
 
 #initialize dataset and dataloaders
 train_dataset = CustomDataset(
-    image_dir='/home/allan/project/sih/Dataset/train/images',
-    annotation_file='/home/allan/project/sih/Dataset/train/annotations_coco.json',
+    image_dir='/train/images/directory/path/',
+    annotation_file='/annotations/path/annotations_coco.json',
     transform=train_transform
 )
 
