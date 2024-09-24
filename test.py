@@ -74,8 +74,8 @@ def process_predictions(predictions, threshold=0.5):
 
 def main():
     global CLASS_NAMES
-    MODEL_SAVE_PATH = '/home/allan/project/sih/efficientdet.pth'
-    IMAGE_PATH = '/home/allan/project/sih/te2s.jpg'
+    MODEL_SAVE_PATH = '/model/path/efficientdet.pth'
+    IMAGE_PATH = '/test/image/path/.jpg'
     INPUT_SIZE = 512
     CLASS_NAMES = ['car', 'bike', 'truck', 'rickshaw', 'cart', 'ambulance']
 
