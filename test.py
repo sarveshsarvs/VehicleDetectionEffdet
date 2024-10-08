@@ -100,9 +100,6 @@ def main():
 
     #draw boxes
     image = Image.open(IMAGE_PATH)
-    time_estimator = TimeEstimatorAI()
-    predicted_time = time_estimator.predict_time(len(scores))
-    print("time: " ,predicted_time)
     draw_boxes(image, boxes, scores, labels, CLASS_NAMES)
 
 
